@@ -26,13 +26,19 @@ const init = async (canvas) => {
     const pixelRatio = window.devicePixelRatio;
     const presentationFormat = navigator.gpu.getPreferredCanvasFormat();
 
+    const width = canvas.clientWidth;
+    const height = canvas.clientHeight;
+
     context.configure({
         device,
         format: presentationFormat,
-        width: canvas.clientWidth,
-        height: canvas.clientHeight,
+        width,
+        height,
         alphaMode: "premultiplied"
     });
+
+    // Multisample: Number of samples
+    const sampleCount = 4;
 
     const pipeline = device.createRenderPipeline({
         vertex: {
@@ -51,8 +57,23 @@ const init = async (canvas) => {
         primitive: {
             topology: 'triangle-list'
         },
-        layout: 'auto'
+        layout: 'auto',
+
+        // Configure multisample in pipeline
+        multisample: {
+            count: 4
+        }
     });
+
+    // Create a custom texture: with multisample, we can't use the texture from canvas
+    const texture = device.createTexture({
+        size: [ width, height ],
+        sampleCount,
+        format: presentationFormat,
+        usage: GPUTextureUsage.RENDER_ATTACHMENT
+    });
+    // Create a view from the texture
+    const view = texture.createView();
 
     function frame() {
         if (!canvas) {
@@ -60,12 +81,16 @@ const init = async (canvas) => {
         }
 
         const commandEncoder = device.createCommandEncoder();
-        const textureView = context.getCurrentTexture().createView();
+        // We no longer use the view from the context of the canvas
+        //const textureView = context.getCurrentTexture().createView();
 
         const renderPassDescriptor = {
             colorAttachments: [
                 {
-                    view: textureView,
+                    // view: textureView, this was the texture view from the canvas
+                    view,   // We use the multisample texture
+                    // with this we specify which canvas we want to paint the result on
+                    resolveTarget: context.getCurrentTexture().createView(),
                     clearValue: {r:0, g:0, b:0, a:1},
                     loadOp: 'clear',
                     storeOp: 'store'
