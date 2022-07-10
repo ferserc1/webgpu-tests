@@ -94,8 +94,6 @@ const init = async (canvas) => {
         alphaMode: "opaque"
     });
 
-    const sampleCount = 4;
-
     const verticesBuffer = device.createBuffer({
         size: cube.vertexArray.byteLength,
         usage: GPUBufferUsage.VERTEX,
@@ -105,6 +103,7 @@ const init = async (canvas) => {
     verticesBuffer.unmap();
 
     const pipeline = device.createRenderPipeline({
+        layout: 'auto',
         vertex: {
             module: device.createShaderModule({ code: vsCode }),
             entryPoint: 'main',
@@ -139,25 +138,23 @@ const init = async (canvas) => {
             topology: 'triangle-list',
             cullMode: 'back'
         },
-        layout: 'auto',
-        multisample: {
-            count: 4
-        },
 
-        depthScencil: {
+        depthStencil: {
             depthWriteEnabled: true,
             depthCompare: 'less',
             format: 'depth24plus'
         }
     });
 
+    // Textura para el depth buffer
     const depthTexture = device.createTexture({
         size: presentationSize,
         format: 'depth24plus',
         usage: GPUTextureUsage.RENDER_ATTACHMENT
     });
 
-    const uniformBufferSize = 4 * 16;   // 4x4 matrix
+    // Buffer para los uniforms
+    const uniformBufferSize = 4 * 16;   // 4x4 matrix (4 bytes per element)
     const uniformBuffer = device.createBuffer({
         size: uniformBufferSize,
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
@@ -174,92 +171,72 @@ const init = async (canvas) => {
             }
         ]
     });
-    
 
-    // We save the render target here, because they will be modified when the canvas is resized
-    let renderTarget = null;
-    let renderTargetView = null;
+    const renderPassDescriptor = {
+        colorAttachments: [
+            {
+                view: null,
+               
+                clearValue: {r:0.5, g:0.5, b:0.5, a:1},
+                loadOp: 'clear',
+                storeOp: 'store'
+            }
+        ],
+        depthStencilAttachment: {
+            view: depthTexture.createView(),
+            depthClearValue: 1.0,
+            depthLoadOp: 'clear',
+            depthStoreOp: 'store'
+        }
+    };
+    
+    const aspect = canvas.clientWidth * canvas.clientHeight;
+    const projectionMatrix = mat4.create();
+    mat4.perspective(projectionMatrix, (2 * Math.PI) / 5, aspect, 1, 100.0);
+
+    function getTransformationMatrix() {
+        const viewMatrix = mat4.create();
+        mat4.translate(viewMatrix, viewMatrix, vec3.fromValues(0, 0, -4));
+        const now = Date.now() / 1000;
+        mat4.rotate(
+            viewMatrix,
+            viewMatrix,
+            1,
+            vec3.fromValues(Math.sin(now), Math.cos(now), 0)
+        );
+
+        const modelViewProjectionMatrix = mat4.create();
+        mat4.multiply(modelViewProjectionMatrix, projectionMatrix, viewMatrix);
+
+        return new Float32Array(modelViewProjectionMatrix);
+    }
 
     function frame() {
         if (!canvas) {
             return;
         }
 
-        // We need to update the texture size each frame, if the presentation
-        // size has changed
-        const currentWidth = canvas.clientWidth;
-        const currentHeight = canvas.clientHeight;
-        if (presentationSize[0] !== currentWidth ||
-            presentationSize[1] !== currentHeight)
-        {
-            if (renderTarget !== null) {
-                renderTarget.destroy();
-            }
-
-            presentationSize[0] = currentWidth;
-            presentationSize[1] = currentHeight;
-
-            /*
-             Chrome Canary shows the following message:
-             Setting an explicit size when calling configure() on a 
-             GPUCanvasContext has been deprecated, and will soon be 
-             removed. Please set the canvas width and height attributes
-             instead. Note that after the initial call to configure() 
-             changes to the canvas width and height will now take effect 
-             without the need to call configure() again.
-
-             But it does not work as indicated. If configure(),
-             fails because it does not match the canvas size with the texture size.
-             texture. If called with size it does not work. Only
-             works with width and height
-             */
-            context.configure({
-                device,
-                format: presentationFormat,
-                //width: currentWidth,
-                // height: currentHeight,
-                size: presentationSize,
-                alphaMode: "premultiplied"
-            });
-
-            renderTarget = device.createTexture({
-                size: presentationSize,
-                sampleCount,
-                format: presentationFormat,
-                usage: GPUTextureUsage.RENDER_ATTACHMENT
-            });
-
-            renderTargetView = renderTarget.createView();
-        }
+        const transformationMatrix = getTransformationMatrix();
+        device.queue.writeBuffer(
+            uniformBuffer,
+            0,
+            transformationMatrix.buffer,
+            transformationMatrix.bytesOffset,
+            transformationMatrix.byteLength
+        );
+        renderPassDescriptor.colorAttachments[0].view = context
+            .getCurrentTexture()
+            .createView();
 
         const commandEncoder = device.createCommandEncoder();
-
-        const renderPassDescriptor = {
-            colorAttachments: [
-                {
-                    // view: textureView, this was the texture view from the canvas
-                    view: renderTargetView,   // We use the multisample texture
-                    // with this we specify which canvas we want to paint the result on
-                    resolveTarget: context.getCurrentTexture().createView(),
-                    clearValue: {r:0, g:0, b:0, a:1},
-                    loadOp: 'clear',
-                    storeOp: 'store'
-                }
-            ],
-            depthStencilAttachment: {
-                view: depthTexture.createView(),
-                depthClearValue: 1.0,
-                depthLoadOp: 'clear',
-                depthStoreOp: 'store'
-            }
-        };
-
         const passEncoder = commandEncoder.beginRenderPass(renderPassDescriptor);
         passEncoder.setPipeline(pipeline);
-        passEncoder.draw(3, 1, 0, 0);
+        passEncoder.setBindGroup(0, uniformBindGroup);
+        passEncoder.setVertexBuffer(0, verticesBuffer);
+        passEncoder.draw(cube.vertexCount, 1, 0, 0);
         passEncoder.end();
-
         device.queue.submit([commandEncoder.finish()]);
+
         requestAnimationFrame(frame);
     }
 
