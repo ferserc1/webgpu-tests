@@ -221,7 +221,7 @@ const init = async (canvas) => {
             uniformBuffer,
             0,
             transformationMatrix.buffer,
-            transformationMatrix.bytesOffset,
+            transformationMatrix.byteOffset,
             transformationMatrix.byteLength
         );
         renderPassDescriptor.colorAttachments[0].view = context
